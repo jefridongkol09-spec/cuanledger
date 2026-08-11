@@ -31,3 +31,9 @@ def tambah_posisi(conn, ticker, lot, harga_beli):
         (ticker, lot, harga_beli),
     )
     conn.commit()
+
+
+def hapus_posisi(conn, ticker):
+    cursor = conn.execute("DELETE FROM posisi WHERE ticker = ?", (ticker,))
+    conn.commit()
+    return cursor.rowcount > 0
