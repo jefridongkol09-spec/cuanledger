@@ -17,6 +17,16 @@ def buat_skema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS harga (
+            ticker TEXT NOT NULL,
+            tanggal TEXT NOT NULL,
+            close REAL NOT NULL CHECK (close > 0),
+            PRIMARY KEY (ticker, tanggal)
+        )
+        """
+    )
     conn.commit()
 
 
@@ -37,3 +47,38 @@ def hapus_posisi(conn, ticker):
     cursor = conn.execute("DELETE FROM posisi WHERE ticker = ?", (ticker,))
     conn.commit()
     return cursor.rowcount > 0
+
+
+def ambil_laporan_mentah(conn):
+    # greatest-n-per-group (n=2: harga terakhir + hari sebelumnya, untuk
+    # hitung return_harian) lewat window function - cara paling langsung
+    # menyatakan "ranking baris per grup, ambil N teratas", dibanding
+    # correlated subquery atau self-join untuk kasus n=2. LEFT JOIN (bukan
+    # INNER) supaya posisi tanpa satu baris harga pun tidak pernah lenyap
+    # diam-diam dari hasil - itu persis "ketiadaan yang terlihat seperti
+    # keberhasilan" yang sudah ditegakkan di seluruh proyek ini.
+    baris = conn.execute(
+        """
+        WITH harga_terurut AS (
+            SELECT
+                ticker,
+                tanggal,
+                close,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ticker ORDER BY tanggal DESC
+                ) AS rn
+            FROM harga
+        )
+        SELECT
+            p.ticker AS ticker,
+            p.lot AS lot,
+            p.harga_beli AS harga_beli,
+            h.tanggal AS tanggal,
+            h.close AS close,
+            h.rn AS rn
+        FROM posisi p
+        LEFT JOIN harga_terurut h ON h.ticker = p.ticker AND h.rn <= 2
+        ORDER BY p.ticker, h.rn
+        """
+    ).fetchall()
+    return [dict(b) for b in baris]
