@@ -1,5 +1,6 @@
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from main import app, get_db
@@ -18,14 +19,26 @@ def _override_get_db(db_path):
     return _override
 
 
-def test_get_posisi_mengembalikan_data(tmp_path):
+@pytest.fixture
+def api(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    buat_skema(conn)
+    conn.close()
+
+    app.dependency_overrides[get_db] = _override_get_db(db_path)
+    try:
+        yield TestClient(app), db_path
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_posisi_mengembalikan_data(api):
     # Data ditanam lewat insert langsung ke DB, bukan lewat POST - kegagalan
     # POST tidak boleh menjatuhkan tes GET ini. Isolasi antar-endpoint sama
     # pentingnya dengan isolasi antar-tes.
-    db_path = tmp_path / "test.db"
+    client, db_path = api
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    buat_skema(conn)
     conn.execute(
         "INSERT INTO posisi (ticker, lot, harga_beli) VALUES (?, ?, ?)",
         ("BBCA", 10, 9500),
@@ -33,12 +46,93 @@ def test_get_posisi_mengembalikan_data(tmp_path):
     conn.commit()
     conn.close()
 
-    app.dependency_overrides[get_db] = _override_get_db(db_path)
-    try:
-        client = TestClient(app)
-        response = client.get("/posisi")
+    response = client.get("/posisi")
 
-        assert response.status_code == 200
-        assert response.json() == [{"ticker": "BBCA", "lot": 10, "harga_beli": 9500}]
-    finally:
-        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    assert response.json() == [{"ticker": "BBCA", "lot": 10, "harga_beli": 9500}]
+
+
+def test_post_posisi_berhasil(api):
+    client, db_path = api
+
+    response = client.post("/posisi", json={"ticker": "BBCA", "lot": 10, "harga_beli": 9500})
+
+    assert response.status_code == 201
+    assert response.json() == {"ticker": "BBCA", "lot": 10, "harga_beli": 9500}
+
+    # Verifikasi persistensi lewat baca langsung ke DB, bukan lewat GET -
+    # isolasi antar-endpoint yang sama seperti alasan tes GET di atas.
+    conn = sqlite3.connect(db_path)
+    baris = conn.execute("SELECT ticker, lot, harga_beli FROM posisi").fetchall()
+    conn.close()
+    assert baris == [("BBCA", 10, 9500)]
+
+
+def test_post_posisi_menolak_lot_nol(api):
+    client, _ = api
+    response = client.post("/posisi", json={"ticker": "BBCA", "lot": 0, "harga_beli": 9500})
+    assert response.status_code == 422
+
+
+def test_post_posisi_menolak_lot_negatif(api):
+    client, _ = api
+    response = client.post("/posisi", json={"ticker": "BBCA", "lot": -5, "harga_beli": 9500})
+    assert response.status_code == 422
+
+
+def test_post_posisi_menolak_harga_beli_nol(api):
+    client, _ = api
+    response = client.post("/posisi", json={"ticker": "BBCA", "lot": 10, "harga_beli": 0})
+    assert response.status_code == 422
+
+
+def test_post_posisi_menolak_field_hilang(api):
+    client, _ = api
+    response = client.post("/posisi", json={"ticker": "BBCA", "lot": 10})
+    assert response.status_code == 422
+
+
+def test_post_posisi_menolak_tipe_salah(api):
+    client, _ = api
+    response = client.post(
+        "/posisi", json={"ticker": "BBCA", "lot": "sepuluh", "harga_beli": 9500}
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any("lot" in str(err.get("loc")) for err in detail)
+
+
+def test_post_posisi_duplikat_ditolak(api):
+    client, _ = api
+    client.post("/posisi", json={"ticker": "BBCA", "lot": 10, "harga_beli": 9500})
+
+    response = client.post("/posisi", json={"ticker": "BBCA", "lot": 5, "harga_beli": 9000})
+
+    assert response.status_code == 409
+    assert "BBCA" in response.json()["detail"]
+
+
+def test_post_posisi_ticker_dinormalisasi_uppercase(api):
+    client, db_path = api
+
+    response = client.post("/posisi", json={"ticker": "bbca", "lot": 10, "harga_beli": 9500})
+
+    assert response.status_code == 201
+    assert response.json()["ticker"] == "BBCA"
+
+    conn = sqlite3.connect(db_path)
+    tickers = [baris[0] for baris in conn.execute("SELECT ticker FROM posisi").fetchall()]
+    conn.close()
+    assert tickers == ["BBCA"]
+
+
+def test_post_posisi_duplikat_case_insensitive(api):
+    # Konsekuensi langsung dari normalisasi uppercase: "bbca" dan "BBCA"
+    # harus terdeteksi sebagai ticker yang sama, bukan dua posisi berbeda.
+    client, _ = api
+    client.post("/posisi", json={"ticker": "BBCA", "lot": 10, "harga_beli": 9500})
+
+    response = client.post("/posisi", json={"ticker": "bbca", "lot": 5, "harga_beli": 9000})
+
+    assert response.status_code == 409

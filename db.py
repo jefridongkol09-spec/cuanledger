@@ -23,3 +23,11 @@ def buat_skema(conn):
 def ambil_semua_posisi(conn):
     baris = conn.execute("SELECT ticker, lot, harga_beli FROM posisi").fetchall()
     return [dict(b) for b in baris]
+
+
+def tambah_posisi(conn, ticker, lot, harga_beli):
+    conn.execute(
+        "INSERT INTO posisi (ticker, lot, harga_beli) VALUES (?, ?, ?)",
+        (ticker, lot, harga_beli),
+    )
+    conn.commit()
