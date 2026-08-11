@@ -136,3 +136,65 @@ def test_post_posisi_duplikat_case_insensitive(api):
     response = client.post("/posisi", json={"ticker": "bbca", "lot": 5, "harga_beli": 9000})
 
     assert response.status_code == 409
+
+
+def _tanam(db_path, ticker, lot, harga_beli):
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO posisi (ticker, lot, harga_beli) VALUES (?, ?, ?)",
+        (ticker, lot, harga_beli),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _ticker_tersisa(db_path):
+    conn = sqlite3.connect(db_path)
+    tickers = {baris[0] for baris in conn.execute("SELECT ticker FROM posisi").fetchall()}
+    conn.close()
+    return tickers
+
+
+def test_delete_posisi_berhasil(api):
+    client, db_path = api
+    _tanam(db_path, "BBCA", 10, 9500)
+
+    response = client.delete("/posisi/BBCA")
+
+    assert response.status_code == 204
+    assert _ticker_tersisa(db_path) == set()
+
+
+def test_delete_posisi_tidak_ditemukan(api):
+    client, _ = api
+    response = client.delete("/posisi/BBCA")
+    assert response.status_code == 404
+
+
+def test_delete_posisi_lintas_case(api):
+    # Jebakan yang sama seperti normalisasi POST: ticker path parameter tidak
+    # lewat model Pydantic sama sekali - gerbang berbeda, jadi normalisasi
+    # harus ditegakkan ulang di sini secara eksplisit, bukan diasumsikan
+    # otomatis mengikuti dari validator POST.
+    client, db_path = api
+    _tanam(db_path, "BBCA", 10, 9500)
+
+    response = client.delete("/posisi/bbca")
+
+    assert response.status_code == 204
+    assert _ticker_tersisa(db_path) == set()
+
+
+def test_delete_posisi_selektif(api):
+    # Kontrol positif, pola yang sama dengan test_hapus_ticker di
+    # prosperidr: membuktikan delete tidak menghapus semua baris, hanya
+    # yang diminta - operasi destruktif pertama API ini wajib dibuktikan
+    # selektif, bukan cuma "berhasil".
+    client, db_path = api
+    _tanam(db_path, "BBCA", 10, 9500)
+    _tanam(db_path, "BBRI", 50, 4400)
+
+    response = client.delete("/posisi/BBCA")
+
+    assert response.status_code == 204
+    assert _ticker_tersisa(db_path) == {"BBRI"}
