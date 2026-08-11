@@ -155,6 +155,16 @@ def _ticker_tersisa(db_path):
     return tickers
 
 
+def _tanam_harga(db_path, ticker, tanggal, close):
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO harga (ticker, tanggal, close) VALUES (?, ?, ?)",
+        (ticker, tanggal, close),
+    )
+    conn.commit()
+    conn.close()
+
+
 def test_delete_posisi_berhasil(api):
     client, db_path = api
     _tanam(db_path, "BBCA", 10, 9500)
@@ -198,3 +208,34 @@ def test_delete_posisi_selektif(api):
 
     assert response.status_code == 204
     assert _ticker_tersisa(db_path) == {"BBRI"}
+
+
+def test_get_laporan_menggabungkan_posisi_dan_harga(api):
+    # Tes integrasi end-to-end untuk JOIN + agregasi: membuktikan
+    # ambil_laporan_mentah (SQL) dan susun_laporan (Python murni, sudah
+    # diuji terpisah di test_laporan.py) benar-benar tersambung lewat
+    # endpoint sungguhan - bukan cuma masing-masing benar sendiri-sendiri.
+    client, db_path = api
+    _tanam(db_path, "BBCA", 10, 9500)
+    _tanam_harga(db_path, "BBCA", "2025-01-03", 9700)
+    _tanam_harga(db_path, "BBCA", "2025-01-04", 9900)
+
+    response = client.get("/laporan")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["posisi"] == [
+        {
+            "ticker": "BBCA",
+            "tanggal": "2025-01-04",
+            "harga": 9900,
+            "return_harian": 2.06,
+            "nilai_pasar": 9900000,
+            "modal": 9500000,
+            "pl": 400000,
+            "pl_persen": 4.21,
+        }
+    ]
+    assert body["total"]["pl"] == 400000
+    assert body["vintage_campuran"] is False
+    assert body["posisi_tanpa_harga"] == []

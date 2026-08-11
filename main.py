@@ -4,7 +4,15 @@ import sqlite3
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from db import get_connection, buat_skema, ambil_semua_posisi, tambah_posisi, hapus_posisi
+from db import (
+    get_connection,
+    buat_skema,
+    ambil_semua_posisi,
+    tambah_posisi,
+    hapus_posisi,
+    ambil_laporan_mentah,
+)
+from laporan import susun_laporan
 
 DB_PATH = os.environ.get("CUANLEDGER_DB", "cuanledger.db")
 
@@ -72,3 +80,13 @@ def hapus_posisi_endpoint(ticker: str, conn=Depends(get_db)):
         # (ticker salah ketik, state basi), bukan 204 idempoten yang
         # menyerap kesalahan itu diam-diam.
         raise HTTPException(status_code=404, detail=f"Posisi {ticker} tidak ditemukan")
+
+
+@app.get("/laporan")
+def baca_laporan(conn=Depends(get_db)):
+    # def biasa, bukan async def - FastAPI/Starlette otomatis menjalankan
+    # handler sinkron ini di threadpool eksternal, jadi panggilan blocking
+    # (sqlite3 di sini, yfinance nanti di ?live=true) tidak membekukan
+    # event loop tanpa perlu run_in_threadpool manual.
+    baris_mentah = ambil_laporan_mentah(conn)
+    return susun_laporan(baris_mentah)
