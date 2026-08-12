@@ -146,6 +146,39 @@ def test_susun_laporan_vintage_campuran():
     }
 
 
+def test_susun_laporan_posisi_tanpa_harga_tidak_dihitung_sebagai_vintage_campuran():
+    # Posisi tanpa harga (tanggal: None) hidup berdampingan dengan posisi
+    # berharga - None tidak boleh ikut masuk himpunan tanggal_semua dan
+    # dianggap "tanggal berbeda". Sudah benar secara konstruksi (continue
+    # melewati baris tanggal_semua.add sebelum sempat dieksekusi untuk
+    # posisi tanpa harga), tapi belum pernah dikunci dengan tes sampai
+    # sekarang.
+    baris = [
+        {
+            "ticker": "BBCA",
+            "lot": 10,
+            "harga_beli": 9500,
+            "tanggal": "2025-01-04",
+            "close": 9900,
+            "rn": 1,
+        },
+        {
+            "ticker": "TLKM",
+            "lot": 15,
+            "harga_beli": 3700,
+            "tanggal": None,
+            "close": None,
+            "rn": None,
+        },
+    ]
+
+    hasil = susun_laporan(baris)
+
+    assert hasil["vintage_campuran"] is False
+    assert hasil["tanggal_berbeda"] == []
+    assert hasil["posisi_tanpa_harga"] == ["TLKM"]
+
+
 def test_susun_laporan_posisi_kosong():
     hasil = susun_laporan([])
 

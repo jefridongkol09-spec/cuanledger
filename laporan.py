@@ -79,6 +79,14 @@ def susun_laporan(baris_mentah):
     # menyumbang modal > 0, jadi total_modal > 0 setiap kali ada minimal
     # satu posisi berharga. ZeroDivisionError ditutup lewat invarian ini,
     # bukan try/except di sekitar pembagian.
+    #
+    # PENTING untuk klien: karena posisi_tanpa_harga dikeluarkan dari total,
+    # total["modal"] TIDAK SAMA DENGAN jumlah field "modal" di semua baris
+    # posisi (yang tanpa harga tetap menampilkan modal-nya sendiri, hanya
+    # tidak disertakan ke agregat). total merepresentasikan "ringkasan
+    # posisi berharga", bukan "seluruh modal yang tertanam". Ini keputusan
+    # sadar, bukan bug - lihat posisi_tanpa_harga untuk daftar yang
+    # dikecualikan.
     if total_modal > 0:
         total_pl = total_nilai - total_modal
         total = {
