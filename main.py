@@ -88,8 +88,10 @@ def hapus_posisi_endpoint(ticker: str, conn=Depends(get_db)):
 def baca_laporan(conn=Depends(get_db)):
     # def biasa, bukan async def - FastAPI/Starlette otomatis menjalankan
     # handler sinkron ini di threadpool eksternal, jadi panggilan blocking
-    # (sqlite3 di sini, yfinance nanti di ?live=true) tidak membekukan
-    # event loop tanpa perlu run_in_threadpool manual.
+    # (sqlite3 di sini) tidak membekukan event loop tanpa perlu
+    # run_in_threadpool manual. Endpoint ini tidak pernah menyentuh
+    # jaringan - selamanya cache-only, lihat refresh_harga() di bawah
+    # untuk satu-satunya jalur yang memanggil yfinance.
     baris_mentah = ambil_laporan_mentah(conn)
     return susun_laporan(baris_mentah)
 
