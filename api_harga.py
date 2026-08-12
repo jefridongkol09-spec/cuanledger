@@ -10,11 +10,15 @@ def _tidak_valid(harga):
     return pd.isna(harga) or harga == 0
 
 
-def ambil_harga_online(ticker, hari=5):
+def ambil_harga_online(ticker, hari=5, timeout=10):
     try:
         saham = yf.Ticker(f"{ticker}.JK")
-        riwayat = saham.history(period=f"{hari}d")
+        riwayat = saham.history(period=f"{hari}d", timeout=timeout)
     except Exception:
+        # Timeout, network putus, ticker tidak dikenal - bentuknya tidak
+        # bisa diprediksi dari sini, jadi tidak dibedakan. Pemanggil
+        # (endpoint refresh) melaporkan kegagalan generik, bukan menebak
+        # alasan spesifik yang tidak benar-benar diketahui.
         return None
 
     tanggal = list(riwayat.index)
@@ -43,5 +47,12 @@ def ambil_harga_online(ticker, hari=5):
 
     return {
         "harga": [round(float(harga), 2) for harga in tutup],
+        # daftar tanggal per elemen "harga" (bukan cuma tanggal_terakhir) -
+        # dibutuhkan supaya endpoint refresh bisa upsert seluruh window,
+        # bukan cuma hari terakhir. Upsert satu-hari-saja akan membiarkan
+        # baris lama di tabel harga jadi "hari sebelumnya" yang sebenarnya
+        # jauh di masa lalu begitu di-JOIN nanti - gap besar yang
+        # tersamar jadi return "harian".
+        "tanggal": [t.strftime("%Y-%m-%d") for t in tanggal],
         "tanggal_terakhir": tanggal[-1].strftime("%Y-%m-%d"),
     }

@@ -3,6 +3,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
+import main
 from main import app, get_db
 from db import buat_skema
 
@@ -239,3 +240,108 @@ def test_get_laporan_menggabungkan_posisi_dan_harga(api):
     assert body["total"]["pl"] == 400000
     assert body["vintage_campuran"] is False
     assert body["posisi_tanpa_harga"] == []
+
+
+def _harga_tersimpan(db_path, ticker):
+    conn = sqlite3.connect(db_path)
+    baris = conn.execute(
+        "SELECT tanggal, close FROM harga WHERE ticker = ? ORDER BY tanggal", (ticker,)
+    ).fetchall()
+    conn.close()
+    return baris
+
+
+def test_refresh_harga_berhasil(api, monkeypatch):
+    client, db_path = api
+    _tanam(db_path, "BBCA", 10, 9500)
+
+    monkeypatch.setattr(
+        main,
+        "ambil_harga_online",
+        lambda ticker: {
+            "harga": [9700.0, 9900.0],
+            "tanggal": ["2025-01-03", "2025-01-04"],
+            "tanggal_terakhir": "2025-01-04",
+        },
+    )
+
+    response = client.post("/harga/refresh")
+
+    assert response.status_code == 200
+    assert response.json() == {"diperbarui": ["BBCA"], "gagal": []}
+    assert _harga_tersimpan(db_path, "BBCA") == [
+        ("2025-01-03", 9700.0),
+        ("2025-01-04", 9900.0),
+    ]
+
+
+def test_refresh_harga_sebagian_gagal_tidak_menghentikan_yang_lain(api, monkeypatch):
+    # Mencakup skenario timeout: ambil_harga_online sengaja tidak
+    # membedakan timeout dari kegagalan lain (lihat api_harga.py -
+    # bentuk kegagalan API eksternal tidak bisa diprediksi, jadi tidak
+    # dipura-pura dibedakan). Kegagalan generik ini SAMA dengan reaksi
+    # yang diharapkan untuk timeout - satu tes ini membuktikan keduanya:
+    # partial-failure isolation dan reaksi terhadap timeout, tanpa
+    # benar-benar menunggu apa pun.
+    client, db_path = api
+    _tanam(db_path, "BBCA", 10, 9500)
+    _tanam(db_path, "BBRI", 50, 4400)
+
+    def fetch_palsu(ticker):
+        if ticker == "BBRI":
+            return None  # simulasi timeout/kegagalan jaringan - sudah
+            # ditangani di dalam ambil_harga_online, keluar sebagai None
+        return {
+            "harga": [4600.0],
+            "tanggal": ["2025-01-04"],
+            "tanggal_terakhir": "2025-01-04",
+        }
+
+    monkeypatch.setattr(main, "ambil_harga_online", fetch_palsu)
+
+    response = client.post("/harga/refresh")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["diperbarui"] == ["BBCA"]
+    assert body["gagal"] == [{"ticker": "BBRI", "alasan": "gagal mengambil harga"}]
+    # BBCA tersimpan meski BBRI gagal - satu ticker gagal tidak boleh
+    # menggagalkan refresh untuk ticker lain.
+    assert _harga_tersimpan(db_path, "BBCA") == [("2025-01-04", 4600.0)]
+    assert _harga_tersimpan(db_path, "BBRI") == []
+
+
+def test_refresh_harga_posisi_kosong(api, monkeypatch):
+    client, _ = api
+    monkeypatch.setattr(main, "ambil_harga_online", lambda ticker: None)
+
+    response = client.post("/harga/refresh")
+
+    assert response.status_code == 200
+    assert response.json() == {"diperbarui": [], "gagal": []}
+
+
+def test_refresh_lalu_laporan_mencerminkan_data_baru(api, monkeypatch):
+    # Bukti ujung-ke-ujung: refresh menulis ke tabel yang sama yang dibaca
+    # GET /laporan - dua endpoint yang benar masing-masing tidak cukup,
+    # harus benar-benar tersambung.
+    client, db_path = api
+    _tanam(db_path, "BBCA", 10, 9500)
+
+    monkeypatch.setattr(
+        main,
+        "ambil_harga_online",
+        lambda ticker: {
+            "harga": [9700.0, 9900.0],
+            "tanggal": ["2025-01-03", "2025-01-04"],
+            "tanggal_terakhir": "2025-01-04",
+        },
+    )
+    client.post("/harga/refresh")
+
+    response = client.get("/laporan")
+
+    assert response.status_code == 200
+    posisi = response.json()["posisi"][0]
+    assert posisi["harga"] == 9900.0
+    assert posisi["return_harian"] == 2.06

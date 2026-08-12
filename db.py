@@ -49,6 +49,23 @@ def hapus_posisi(conn, ticker):
     return cursor.rowcount > 0
 
 
+def simpan_harga(conn, ticker, pasangan_tanggal_harga):
+    # Upsert, bukan insert murni - refresh untuk tanggal yang sama harus
+    # MEMPERBARUI close-nya (harga bisa direvisi Yahoo Finance setelah
+    # penutupan), bukan ditolak sebagai duplikat PRIMARY KEY. Beda sengaja
+    # dari tambah_posisi yang menolak duplikat (409) - "refresh" secara
+    # semantik memang berarti timpa yang lama dengan yang baru.
+    for tanggal, close in pasangan_tanggal_harga:
+        conn.execute(
+            """
+            INSERT INTO harga (ticker, tanggal, close) VALUES (?, ?, ?)
+            ON CONFLICT (ticker, tanggal) DO UPDATE SET close = excluded.close
+            """,
+            (ticker, tanggal, close),
+        )
+    conn.commit()
+
+
 def ambil_laporan_mentah(conn):
     # greatest-n-per-group (n=2: harga terakhir + hari sebelumnya, untuk
     # hitung return_harian) lewat window function - cara paling langsung
