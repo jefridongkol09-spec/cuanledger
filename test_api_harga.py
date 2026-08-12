@@ -6,8 +6,10 @@ import api_harga
 class FakeTicker:
     def __init__(self, riwayat):
         self._riwayat = riwayat
+        self.timeout_dipakai = None
 
-    def history(self, period):
+    def history(self, period, timeout=None):
+        self.timeout_dipakai = timeout
         return self._riwayat
 
 
@@ -27,8 +29,24 @@ def test_ambil_harga_online_berhasil(monkeypatch):
 
     hasil = api_harga.ambil_harga_online("BBCA")
 
-    assert hasil == {"harga": [100.12, 200.46], "tanggal_terakhir": "2026-08-04"}
+    assert hasil == {
+        "harga": [100.12, 200.46],
+        "tanggal": ["2026-08-03", "2026-08-04"],
+        "tanggal_terakhir": "2026-08-04",
+    }
     assert simbol_dipakai == ["BBCA.JK"]
+
+
+def test_ambil_harga_online_meneruskan_timeout_eksplisit(monkeypatch):
+    # Verifikasi bahwa timeout benar-benar diteruskan ke history(), bukan
+    # cuma diasumsikan dari default library. FakeTicker mencatat nilai yang
+    # diterima supaya bisa dibuktikan, bukan ditebak.
+    tiket = FakeTicker(buat_df([100.0], ["2026-08-04"]))
+    monkeypatch.setattr(api_harga.yf, "Ticker", lambda simbol: tiket)
+
+    api_harga.ambil_harga_online("BBCA", timeout=3)
+
+    assert tiket.timeout_dipakai == 3
 
 
 def test_ambil_harga_online_hari_terakhir_belum_tersedia(monkeypatch):
@@ -40,7 +58,11 @@ def test_ambil_harga_online_hari_terakhir_belum_tersedia(monkeypatch):
 
     hasil = api_harga.ambil_harga_online("BBCA")
 
-    assert hasil == {"harga": [100.0, 200.0], "tanggal_terakhir": "2026-08-04"}
+    assert hasil == {
+        "harga": [100.0, 200.0],
+        "tanggal": ["2026-08-03", "2026-08-04"],
+        "tanggal_terakhir": "2026-08-04",
+    }
 
 
 def test_ambil_harga_online_nan_di_tengah_ditolak(monkeypatch, capsys):
@@ -81,7 +103,11 @@ def test_ambil_harga_online_nol_di_ekor_dibuang(monkeypatch):
 
     hasil = api_harga.ambil_harga_online("BBCA")
 
-    assert hasil == {"harga": [100.0, 200.0], "tanggal_terakhir": "2026-08-04"}
+    assert hasil == {
+        "harga": [100.0, 200.0],
+        "tanggal": ["2026-08-03", "2026-08-04"],
+        "tanggal_terakhir": "2026-08-04",
+    }
 
 
 def test_ambil_harga_online_semua_nan(monkeypatch):
@@ -104,5 +130,18 @@ def test_ambil_harga_online_error_jaringan(monkeypatch):
         raise ConnectionError("network down")
 
     monkeypatch.setattr(api_harga.yf, "Ticker", gagal)
+
+    assert api_harga.ambil_harga_online("BBCA") is None
+
+
+def test_ambil_harga_online_timeout_diperlakukan_sama_seperti_kegagalan_lain(monkeypatch):
+    # Timeout tidak diuji dengan benar-benar menunggu - dimock supaya
+    # melempar exception yang sama bentuknya dengan timeout sungguhan,
+    # lalu diperiksa reaksinya. Yang diuji adalah reaksi terhadap
+    # kegagalan, bukan kegagalannya sendiri.
+    def timeout_habis(simbol):
+        raise TimeoutError("waktu abis")
+
+    monkeypatch.setattr(api_harga.yf, "Ticker", timeout_habis)
 
     assert api_harga.ambil_harga_online("BBCA") is None

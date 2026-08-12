@@ -11,8 +11,10 @@ from db import (
     tambah_posisi,
     hapus_posisi,
     ambil_laporan_mentah,
+    simpan_harga,
 )
 from laporan import susun_laporan
+from api_harga import ambil_harga_online
 
 DB_PATH = os.environ.get("CUANLEDGER_DB", "cuanledger.db")
 
@@ -90,3 +92,36 @@ def baca_laporan(conn=Depends(get_db)):
     # event loop tanpa perlu run_in_threadpool manual.
     baris_mentah = ambil_laporan_mentah(conn)
     return susun_laporan(baris_mentah)
+
+
+@app.post("/harga/refresh")
+def refresh_harga(conn=Depends(get_db)):
+    # POST, bukan GET - efek sampingnya (menulis ke tabel harga) melanggar
+    # jaminan safe method GET kalau ditempelkan sebagai ?live=true di
+    # /laporan. Pemisahan ini sengaja: GET /laporan selamanya murni
+    # membaca cache, endpoint ini satu-satunya yang pernah menyentuh
+    # jaringan atau menulis harga.
+    #
+    # def biasa (bukan async def) - alasan yang sama seperti baca_laporan:
+    # panggilan blocking (yfinance) otomatis lari ke threadpool Starlette.
+    posisi = ambil_semua_posisi(conn)
+    diperbarui = []
+    gagal = []
+
+    for info in posisi:
+        ticker = info["ticker"]
+        hasil = ambil_harga_online(ticker)
+        if hasil is None:
+            # ambil_harga_online sengaja tidak membedakan timeout dari
+            # kegagalan lain (jaringan putus, ticker tidak dikenal, hari
+            # bolong di tengah) - bentuk kegagalan API eksternal tidak
+            # bisa diprediksi, jadi alasannya generik dan jujur, bukan
+            # dipura-pura presisi.
+            gagal.append({"ticker": ticker, "alasan": "gagal mengambil harga"})
+            continue
+
+        pasangan = list(zip(hasil["tanggal"], hasil["harga"]))
+        simpan_harga(conn, ticker, pasangan)
+        diperbarui.append(ticker)
+
+    return {"diperbarui": diperbarui, "gagal": gagal}
